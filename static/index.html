@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blue Ant KI Portfolio-Dashboard</title>
+    <!-- Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Style -->
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <i class="fa-solid fa-ant-design logo-icon"></i>
+                <span class="logo-text">Blue Ant <span class="ai-badge">KI</span></span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#dashboard" class="nav-item active" data-target="dashboard-section">
+                    <i class="fa-solid fa-chart-line"></i> Dashboard
+                </a>
+                <a href="#prompts" class="nav-item" data-target="prompts-section">
+                    <i class="fa-solid fa-code"></i> Prompts-Editor
+                </a>
+                <a href="#settings" class="nav-item" data-target="settings-section">
+                    <i class="fa-solid fa-gears"></i> Einstellungen
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="dot pulse-green"></span>
+                    <span class="status-label">Backend verbunden</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <div class="header-left">
+                    <h1 id="page-title">Portfolio-Dashboard</h1>
+                    <div class="portfolio-selector-container">
+                        <select id="portfolio-select" class="styled-select">
+                            <option value="">-- Portfolio auswählen --</option>
+                        </select>
+                        <button id="analyze-btn" class="btn btn-primary">
+                            <i class="fa-solid fa-brain"></i> KI-Analyse starten
+                        </button>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <button id="set-key-btn" class="btn btn-secondary">
+                        <i class="fa-solid fa-key"></i> API-Schlüssel festlegen
+                    </button>
+                </div>
+            </header>
+
+            <!-- Loading Spinner -->
+            <div id="loading-overlay" class="loading-overlay hidden">
+                <div class="spinner-container">
+                    <div class="spinner"></div>
+                    <p class="loading-text">Blue Ant Kennzahlen werden geladen und KI-Analysen durchgeführt...</p>
+                    <p class="sub-loading-text">Dies führt mehrere LLM-Prognosen aus und kann einen Moment dauern...</p>
+                </div>
+            </div>
+
+            <!-- Content Sections -->
+            <div class="content-wrapper">
+                <!-- Section 1: Dashboard -->
+                <section id="dashboard-section" class="tab-content active">
+                    <!-- Stat Cards -->
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon bg-blue"><i class="fa-solid fa-diagram-project"></i></div>
+                            <div class="stat-data">
+                                <span class="stat-value" id="stat-total-projects">0</span>
+                                <span class="stat-label">Projekte gesamt</span>
+                            </div>
+                        </div>
+                        <div class="stat-card critical-alert-card" id="critical-projects-card">
+                            <div class="stat-icon bg-red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                            <div class="stat-data">
+                                <span class="stat-value text-red" id="stat-critical-projects">0</span>
+                                <span class="stat-label">Kritische Projekte</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon bg-green"><i class="fa-solid fa-shield-halved"></i></div>
+                            <div class="stat-data">
+                                <span class="stat-value text-green" id="stat-green-projects">0</span>
+                                <span class="stat-label">Status Grün</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon bg-yellow"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                            <div class="stat-data">
+                                <span class="stat-value text-yellow" id="stat-yellow-projects">0</span>
+                                <span class="stat-label">Status Gelb</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI Executive Summary & Charts -->
+                    <div class="dashboard-grid">
+                        <!-- AI Executive Summary -->
+                        <div class="grid-card span-2 glass-panel">
+                            <div class="card-header">
+                                <h3><i class="fa-solid fa-sparkles text-purple"></i> KI Portfolio-Zusammenfassung</h3>
+                                <span class="badge badge-purple">KI-generiert</span>
+                            </div>
+                            <div class="card-body">
+                                <div id="portfolio-ai-summary" class="ai-summary-text">
+                                    Bitte wählen Sie ein Portfolio aus und starten Sie die KI-Analyse, um die Zusammenfassung zu erstellen.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Status Distribution Chart -->
+                        <div class="grid-card glass-panel">
+                            <div class="card-header">
+                                <h3>Statusampel-Verteilung</h3>
+                            </div>
+                            <div class="card-body chart-body">
+                                <canvas id="status-chart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Effort Comparison Chart -->
+                    <div class="dashboard-row glass-panel">
+                        <div class="card-header">
+                            <h3>Plan- vs. Ist-Aufwand pro Projekt (Stunden)</h3>
+                        </div>
+                        <div class="card-body chart-body-large">
+                            <canvas id="effort-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Projects List Table -->
+                    <div class="dashboard-row glass-panel">
+                        <div class="card-header">
+                            <h3>Details der Portfolio-Projekte</h3>
+                            <span class="info-label">Zeile anklicken für detaillierte KI-Analyse</span>
+                        </div>
+                        <div class="card-body table-container">
+                            <table class="styled-table" id="projects-table">
+                                <thead>
+                                    <tr>
+                                        <th>Projekt-ID</th>
+                                        <th>Projektname</th>
+                                        <th>Statusampel</th>
+                                        <th>Geplanter Aufwand</th>
+                                        <th>Ist-Aufwand</th>
+                                        <th>Abweichung</th>
+                                        <th>Fortschritt</th>
+                                        <th>Kritikalität</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="placeholder-row">
+                                        <td colspan="8">Keine Daten geladen. Wählen Sie ein Portfolio aus, um zu beginnen.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 3: Prompts Editor -->
+                <section id="prompts-section" class="tab-content">
+                    <div class="glass-panel max-width-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-pencil"></i> KI-Prompts anpassen</h3>
+                            <p class="subtitle">Systeminstruktionen im laufenden Betrieb anpassen. Die Änderungen werden direkt in prompts.yaml gespeichert.</p>
+                        </div>
+                        <div class="card-body">
+                            <form id="prompts-form">
+                                <div class="form-group">
+                                    <label for="prompt-system">System-Prompt (LLM-Verhaltensregeln)</label>
+                                    <textarea id="prompt-system" class="styled-textarea" rows="5"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label for="prompt-project">Projekt-Analyse Prompt</label>
+                                    <textarea id="prompt-project" class="styled-textarea" rows="12"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label for="prompt-portfolio">Portfolio-Analyse Prompt</label>
+                                    <textarea id="prompt-portfolio" class="styled-textarea" rows="12"></textarea>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fa-solid fa-floppy-disk"></i> Prompts speichern
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 4: System Settings -->
+                <section id="settings-section" class="tab-content">
+                    <div class="glass-panel max-width-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-sliders"></i> Systemeinstellungen</h3>
+                            <p class="subtitle">Verbindungskennzahlen und LLM-Parameter in config.yaml anpassen.</p>
+                        </div>
+                        <div class="card-body">
+                            <form id="settings-form">
+                                <div class="form-section-header">Blue Ant API-Einstellungen</div>
+                                <div class="form-row">
+                                    <div class="form-group col-2">
+                                        <label for="settings-ba-url">Blue Ant Service-Basis-URL</label>
+                                        <input type="text" id="settings-ba-url" class="styled-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settings-ba-ttl">Cache TTL (Sekunden)</label>
+                                        <input type="number" id="settings-ba-ttl" class="styled-input">
+                                    </div>
+                                </div>
+
+                                <div class="form-section-header">Ollama KI-Verbindungseinstellungen</div>
+                                <div class="form-row">
+                                    <div class="form-group col-2">
+                                        <label for="settings-ol-url">Ollama Host-Verbindungspunkt</label>
+                                        <input type="text" id="settings-ol-url" class="styled-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settings-ol-model">Modell-Name</label>
+                                        <input type="text" id="settings-ol-model" class="styled-input">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="settings-ol-retries">Verbindungs-Wiederholungsversuche</label>
+                                        <input type="number" id="settings-ol-retries" class="styled-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settings-ol-timeout">Timeout (Sekunden)</label>
+                                        <input type="number" id="settings-ol-timeout" class="styled-input">
+                                    </div>
+                                </div>
+
+
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fa-solid fa-floppy-disk"></i> Einstellungen speichern
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- API Token Overlay Modal -->
+    <div id="key-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key text-yellow"></i> API-Schlüssel festlegen</h3>
+                <button id="close-modal-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Bitte geben Sie Ihre API-Token ein. Die Schlüssel werden sicher lokal in Ihrem Browser (Local Storage) gespeichert und bei API-Anfragen im Header mitgesendet.</p>
+                <div class="form-group">
+                    <label for="modal-api-token">Blue Ant REST API-Token (Bearer-Token)</label>
+                    <input type="password" id="modal-api-token" class="styled-input" placeholder="Bearer oder base64 Token...">
+                </div>
+                <div class="form-group" style="margin-top: 15px;">
+                    <label for="modal-ollama-token">Ollama API-Schlüssel (Optional für Hochschul-Modell)</label>
+                    <input type="password" id="modal-ollama-token" class="styled-input" placeholder="Ollama API-Key...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="clear-token-btn" class="btn btn-danger">Schlüssel löschen</button>
+                <button id="save-token-btn" class="btn btn-primary">Schlüssel speichern</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Detail AI Modal -->
+    <div id="project-detail-modal" class="modal-overlay hidden">
+        <div class="modal-content-large glass-panel">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-brain text-purple"></i> Detaillierte KI-Projektbewertung</h3>
+                <button id="close-project-modal-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body project-modal-body" id="project-detail-modal-body">
+                <!-- Dynamischer Inhalt -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Main Logic -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

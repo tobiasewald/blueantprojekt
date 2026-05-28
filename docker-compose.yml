@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  ai-core:
+    build: .
+    container_name: blueant-ai-core
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/workspace/config.yaml
+      - ./prompts.yaml:/workspace/prompts.yaml
+      - ./reports:/workspace/reports
+    environment:
+      - BLUEANT_API_KEY=${BLUEANT_API_KEY}
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434} # Allows local fallback or HPC URL
+    restart: unless-stopped

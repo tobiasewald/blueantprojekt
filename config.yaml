@@ -1,0 +1,8 @@
+blueant:
+  cache_ttl: 600
+  url: https://dashboard-examples.blueant.cloud/rest
+ollama:
+  model: llama3
+  retries: 3
+  timeout: 60
+  url: https://f2ki-h100-1.f2.htw-berlin.de:11435

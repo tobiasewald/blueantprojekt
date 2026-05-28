@@ -1,0 +1,123 @@
+# System and Analysis Prompts for AI Core Analysis
+
+system_prompt: |
+  You are an expert Project Portfolio Analyst and Problem Manager. Your task is to analyze project status reports, schedules, and key performance indicators (KPIs) to provide highly structured, consistent, objective, and actionable insights.
+  You must output your findings as a single, valid JSON object matching the requested schema EXACTLY.
+  Do not include any introductory or concluding text outside of the JSON block. Do not wrap the JSON in Markdown formatting (e.g. do not write ```json ... ```) unless requested; return ONLY the raw JSON string.
+
+project_analysis_prompt: |
+  Perform a detailed status and trend analysis on the project data below.
+  
+  PROJECT METADATA:
+  - ID: {project_id}
+  - Name: {project_name}
+  - Project Number: {project_number}
+  - Start Date: {start_date}
+  - End Date: {end_date}
+  - Status Traffic Light (Statusampel): {overall_risk}
+  
+  MEMO FIELDS (QUALITATIVE STATUS DATA):
+  - Status Description: {status_memo}
+  - Gegenstand (Subject/Objective): {subject_memo}
+  - Problems/Issues: {problem_memo}
+  
+  KPIS (EFFORT, COSTS, AND PROGRESS):
+  {kpis_summary}
+  
+  STATUS HISTORY LOG:
+  {status_history}
+  
+  ANALYSIS INSTRUCTIONS:
+  1. Compare planned effort (Plan-Aufwand) against actual effort (Ist-Aufwand). Identify any deviations.
+  2. Analyze current progress in relation to the elapsed time. Determine if the project is on track, lagging, or ahead of schedule.
+  3. Formulate a realistic forecast (prognosis) of the expected effort and timeline completion based on the current burn rate and historical comments.
+  4. Summarize the text memo fields concisely: status description, project subject/objectives, and current problems.
+  5. Identify if the project is CRITICAL. Kriteria for critical rating: overall risk is red/yellow, significant progress lag, or high-severity issues reported in the status text field.
+  6. Assess whether the project goals (Gegenstand) align with the current status and trajectory.
+  
+  Return your analysis as a single JSON object with this exact key structure:
+  {{
+    "project_id": {project_id},
+    "project_name": "{project_name}",
+    "timestamp": "{current_timestamp}",
+    "effort_analysis": {{
+      "planned_hours": {planned_hours},
+      "actual_hours": {actual_hours},
+      "variance_hours": {variance_hours},
+      "variance_percent": {variance_percent},
+      "assessment": "Compare planned vs actual effort, noting overruns or savings."
+    }},
+    "progress_analysis": {{
+      "progress_percent": {progress_percent},
+      "elapsed_time_percent": {elapsed_time_percent},
+      "status_relative_to_deadline": "Assess progress relative to baseline start/end dates."
+    }},
+    "predictions": {{
+      "estimated_remaining_hours": {estimated_remaining_hours},
+      "forecasted_total_hours": {forecasted_total_hours},
+      "expected_completion_date": "YYYY-MM-DD",
+      "prognosis_confidence": "high/medium/low",
+      "prognosis_text": "Prognosis detailing future effort and timeline trends."
+    }},
+    "text_summaries": {{
+      "status_summary": "Concise summary of status memo.",
+      "subject_summary": "Concise summary of subject/Gegenstand memo.",
+      "problems_summary": "Concise summary of problems/risks memo."
+    }},
+    "risk_assessment": {{
+      "statusampel": "{overall_risk}",
+      "is_critical": {is_critical_bool},
+      "criticality_level": "low/medium/high",
+      "criticality_reasons": [],
+      "goals_vs_status_eval": "Compare project objectives/Gegenstand with current status and list contradictions or warnings."
+    }}
+  }}
+
+portfolio_analysis_prompt: |
+  Perform a portfolio-level analysis and executive summary based on the aggregated data of individual projects within Portfolio "{portfolio_name}".
+  
+  PORTFOLIO DETAILS:
+  - ID: {portfolio_id}
+  - Name: {portfolio_name}
+  - Date Range: {date_from} to {date_to}
+  
+  AGGREGATED PROJECTS DATA:
+  {projects_data_summary}
+  
+  INSTRUCTIONS:
+  1. Synthesize the overall health of the portfolio.
+  2. List critical projects and highlight the key risks driving their criticality.
+  3. Identify potential cross-project dependencies or systemic risks (e.g. resource issues, systemic schedule delays).
+  4. Provide recommended actions for the Problem Manager.
+  
+  Return your portfolio summary as a single JSON object with this exact key structure:
+  {{
+    "portfolio_id": {portfolio_id},
+    "portfolio_name": "{portfolio_name}",
+    "timestamp": "{current_timestamp}",
+    "metrics": {{
+      "total_projects": {total_projects},
+      "critical_projects_count": {critical_count},
+      "status_distribution": {{
+        "green": {green_count},
+        "yellow": {yellow_count},
+        "red": {red_count}
+      }}
+    }},
+    "executive_summary": "High-level summary of the portfolio status, budget compliance, and trajectory.",
+    "critical_projects_overview": [
+      {{
+        "project_id": 123,
+        "project_name": "Project Name",
+        "reason_critical": "Summarized reason why this project is critical."
+      }}
+    ],
+    "systemic_issues": [
+      "Systemic issue or dependency 1",
+      "Systemic issue or dependency 2"
+    ],
+    "action_recommendations": [
+      "Action recommendation 1",
+      "Action recommendation 2"
+    ]
+  }}
