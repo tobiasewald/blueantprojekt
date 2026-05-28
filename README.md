@@ -12,17 +12,7 @@ Das System wurde nach modernen Software-Design-Richtlinien modular und lose geko
 
 Das folgende Ablaufdiagramm beschreibt den Datenfluss bei einer Portfolio- bzw. Projektanalyse:
 
-```mermaid
-graph TD
-    A[analysis_service.py] -->|1. Holt Projektdaten| B(blueant_client.py)
-    A -->|2. Übergibt Projektdaten| C[prompt_engine.py]
-    C -->|3. Liest Template| D[prompts.yaml]
-    C -->|4. Baut fertigen Prompt zusammen| A
-    A -->|5. Sendet Prompt an LLM| E[llm_client.py]
-    E -->|6. Führt API-Call aus| F(Ollama LLM)
-```
-
-*(Ein entsprechendes Ablaufdiagramm befindet sich auch als Bild/Screenshot in dieser Dokumentation).*
+<img width="481" height="552" alt="Ablaufdiagramm" src="https://github.com/user-attachments/assets/6531c20d-2f2d-46b8-96b5-9be8504854fd" />
 
 ---
 
