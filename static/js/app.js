@@ -343,16 +343,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     {
                         label: 'Geplanter Aufwand (Stunden)',
                         data: plannedData,
-                        backgroundColor: 'rgba(37, 99, 235, 0.4)',
-                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(0, 90, 169, 0.4)',
+                        borderColor: '#005aa9',
                         borderWidth: 1,
                         borderRadius: 4
                     },
                     {
                         label: 'Ist-Aufwand (Stunden)',
                         data: actualData,
-                        backgroundColor: 'rgba(14, 165, 233, 0.4)',
-                        borderColor: '#0ea5e9',
+                        backgroundColor: 'rgba(0, 162, 232, 0.4)',
+                        borderColor: '#00a2e8',
                         borderWidth: 1,
                         borderRadius: 4
                     }
