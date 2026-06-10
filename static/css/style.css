@@ -9,7 +9,7 @@
     --bg-sidebar: #060911;
     --card-bg: rgba(16, 24, 48, 0.5);
     --card-border: rgba(255, 255, 255, 0.06);
-    --card-hover-border: rgba(99, 102, 241, 0.25);
+    --card-hover-border: rgba(37, 99, 235, 0.25);
     
     /* Text */
     --text-primary: #f8fafc;
@@ -17,12 +17,12 @@
     --text-muted: #64748b;
     
     /* Branding & Highlights */
-    --primary: #6366f1;
-    --primary-hover: #4f46e5;
-    --primary-glow: rgba(99, 102, 241, 0.15);
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --primary-glow: rgba(37, 99, 235, 0.15);
     
-    --purple: #a855f7;
-    --purple-glow: rgba(168, 85, 247, 0.15);
+    --purple: #0ea5e9;
+    --purple-glow: rgba(14, 165, 233, 0.15);
     
     /* Semantic alerts */
     --success: #10b981;
@@ -76,8 +76,8 @@ body {
     height: 100vh;
     width: 100vw;
     background-image: 
-        radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.05) 0px, transparent 50%);
+        radial-gradient(at 0% 0%, rgba(37, 99, 235, 0.08) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(14, 165, 233, 0.05) 0px, transparent 50%);
 }
 
 /* Sidebar */
@@ -154,8 +154,8 @@ body {
 
 .nav-item.active {
     color: var(--text-primary);
-    background-color: rgba(99, 102, 241, 0.08);
-    border-color: rgba(99, 102, 241, 0.15);
+    background-color: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.15);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
 }
 
@@ -258,13 +258,13 @@ body {
 .btn-primary {
     background-color: var(--primary);
     color: var(--text-primary);
-    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
 }
 
 .btn-primary:hover {
     background-color: var(--primary-hover);
     transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
 }
 
 .btn-secondary {
@@ -377,7 +377,7 @@ body {
     font-size: 20px;
 }
 
-.bg-blue { background-color: rgba(99, 102, 241, 0.1); color: var(--primary); }
+.bg-blue { background-color: rgba(37, 99, 235, 0.1); color: var(--primary); }
 .bg-red { background-color: var(--danger-bg); color: var(--danger); }
 .bg-green { background-color: var(--success-bg); color: var(--success); }
 .bg-yellow { background-color: var(--warning-bg); color: var(--warning); }
@@ -443,7 +443,7 @@ body {
 .badge-purple {
     background-color: var(--purple-glow);
     color: var(--purple);
-    border: 1px solid rgba(168, 85, 247, 0.2);
+    border: 1px solid rgba(14, 165, 233, 0.2);
 }
 
 .card-body {
@@ -725,7 +725,7 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin: 28px 0 16px 0;
-    border-bottom: 1px solid rgba(99, 102, 241, 0.15);
+    border-bottom: 1px solid rgba(37, 99, 235, 0.15);
     padding-bottom: 6px;
 }
 
@@ -868,7 +868,7 @@ body {
 }
 
 .report-item.active {
-    background-color: rgba(99, 102, 241, 0.05);
+    background-color: rgba(37, 99, 235, 0.05);
     border-left: 4px solid var(--primary);
 }
 
