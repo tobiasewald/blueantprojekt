@@ -551,7 +551,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="metric-details-row">
                         <span class="metric-details-label">Abweichung</span>
-                        <span class="metric-details-val ${(effort.variance_percent || 0) > 15 ? 'text-red' : ''}">
+                        <span class="metric-details-val ${(effort.variance_percent || 0) > 15 ? 'text-red' : (effort.variance_percent || 0) > 5 ? 'text-yellow' : (effort.variance_percent || 0) < 0 ? 'text-green' : ''}">
                             ${(effort.variance_hours || 0) > 0 ? '+' : ''}${(effort.variance_hours || 0).toLocaleString()} Stunden (${effort.variance_percent || 0}%)
                         </span>
                     </div>

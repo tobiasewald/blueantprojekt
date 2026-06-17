@@ -195,6 +195,33 @@ class AnalysisService:
                 logger.info(f"FETCHED KPIs for portfolio project {pid}: {kpis}")
                 status_history = await blueant_client.get_project_status_history(pid, api_key=api_key)
                 
+                # Calculate correct baseline values to override LLM hallucinations
+                planned_hours = 0.0
+                actual_hours = 0.0
+                progress_percent = 0.0
+                for k in kpis:
+                    if k.get("period", "TOTAL") != "TOTAL":
+                        continue
+                    k_id = k.get("id", "")
+                    name_lower = k.get("name", "").lower()
+                    val = k.get("value", 0.0) or 0.0
+                    
+                    if k_id == "WorkTotalPlan":
+                        planned_hours = float(val)
+                    elif k_id == "WorkTotalActual":
+                        actual_hours = float(val)
+                    elif k_id == "SubjectiveProgress":
+                        progress_percent = float(val)
+                    elif ("plan" in name_lower or "basisplan" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
+                        planned_hours = float(val)
+                    elif ("ist" in name_lower or "actual" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
+                        actual_hours = float(val)
+                    elif "fortschritt" in name_lower or "progress" in name_lower or "fertigstellung" in name_lower:
+                        progress_percent = float(val)
+                
+                variance_hours = actual_hours - planned_hours
+                variance_percent = round((variance_hours / planned_hours * 100.0) if planned_hours > 0 else 0.0, 2)
+
                 # Format Prompt
                 prompt = prompt_engine.format_project_prompt(proj, kpis, status_history)
                 system_prompt = prompt_engine.system_prompt
@@ -205,7 +232,21 @@ class AnalysisService:
                 
                 if llm_response:
                     cleaned = self._clean_json_response(llm_response)
-                    return json.loads(cleaned)
+                    result_data = json.loads(cleaned)
+                    
+                    # Sanitize / overwrite calculated numerical fields to prevent LLM math hallucinations
+                    if "effort_analysis" not in result_data:
+                        result_data["effort_analysis"] = {}
+                    result_data["effort_analysis"]["planned_hours"] = planned_hours
+                    result_data["effort_analysis"]["actual_hours"] = actual_hours
+                    result_data["effort_analysis"]["variance_hours"] = variance_hours
+                    result_data["effort_analysis"]["variance_percent"] = variance_percent
+                    
+                    if "progress_analysis" not in result_data:
+                        result_data["progress_analysis"] = {}
+                    result_data["progress_analysis"]["progress_percent"] = progress_percent
+                    
+                    return result_data
                 else:
                     return self._generate_project_fallback(proj, kpis, "LLM generated no response.")
             except Exception as e:
