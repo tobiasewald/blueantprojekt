@@ -75,7 +75,11 @@ class PromptEngine:
         actual_hours = 0.0
         progress_percent = 0.0
         kpi_lines = []
-
+        
+        # Track priority strength (to prevent sub-budgets from overwriting main metrics)
+        planned_strength = 0
+        actual_strength = 0
+        
         for k in kpis:
             if k.get("period", "TOTAL") != "TOTAL":
                 continue
@@ -83,23 +87,55 @@ class PromptEngine:
             k_id = k.get("id", "")
             name = k.get("name", "")
             name_lower = name.lower()
-            val = k.get("value", 0.0) or 0.0
+            val = float(k.get("value", 0.0) or 0.0)
             unit = k.get("unit", "") or ""
+            
+            # Convert Person Days (PT) to Hours (h)
+            if unit == "PT":
+                val = val * 8.0
+                unit = "h"
             
             kpi_lines.append(f"- {name}: {val} {unit}".strip())
             
-            if k_id == "WorkTotalPlan":
-                planned_hours = float(val)
-            elif k_id == "WorkTotalActual":
-                actual_hours = float(val)
-            elif k_id == "SubjectiveProgress":
-                progress_percent = float(val)
-            elif ("plan" in name_lower or "basisplan" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
-                planned_hours = float(val)
-            elif ("ist" in name_lower or "actual" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
-                actual_hours = float(val)
+            if k_id == "SubjectiveProgress":
+                progress_percent = val
             elif "fortschritt" in name_lower or "progress" in name_lower or "fertigstellung" in name_lower:
-                progress_percent = float(val)
+                if k_id == "SubjectiveProgress" or progress_percent == 0.0:
+                    progress_percent = val
+            
+            # Planned hours matching priority
+            if k_id == "WorkTotalPlan":
+                planned_hours = val
+                planned_strength = 3
+            elif k_id == "ProjectBudgetWorkPlan":
+                if planned_strength < 3:
+                    planned_hours = val
+                    planned_strength = 2
+            elif k_id == "BudgetPlanWork":
+                if planned_strength < 2:
+                    planned_hours = val
+                    planned_strength = 1
+            elif ("plan" in name_lower or "basisplan" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
+                if "teilprojekt" not in name_lower and "ticket" not in name_lower and "mehrarbeit" not in name_lower:
+                    if planned_strength == 0:
+                        planned_hours = val
+            
+            # Actual hours matching priority
+            if k_id == "WorkTotalActual":
+                actual_hours = val
+                actual_strength = 3
+            elif k_id == "ProjectBudgetWorkActual":
+                if actual_strength < 3:
+                    actual_hours = val
+                    actual_strength = 2
+            elif k_id == "BudgetIsWork":
+                if actual_strength < 2:
+                    actual_hours = val
+                    actual_strength = 1
+            elif ("ist" in name_lower or "actual" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
+                if "teilprojekt" not in name_lower and "ticket" not in name_lower and "mehrarbeit" not in name_lower:
+                    if actual_strength == 0:
+                        actual_hours = val
 
         kpis_summary = "\n".join(kpi_lines) if kpi_lines else "No KPIs available."
         variance_hours = actual_hours - planned_hours
