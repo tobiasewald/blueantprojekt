@@ -26,14 +26,18 @@ project_analysis_prompt: |
   
   STATUS HISTORY LOG:
   {status_history}
-  
+
+  MILESTONES (MEILENSTEINE) - {milestones_total} total, {milestones_overdue} overdue:
+  {milestones_summary}
+
   ANALYSIS INSTRUCTIONS:
   1. Compare planned effort (Plan-Aufwand) against actual effort (Ist-Aufwand). Identify any deviations.
   2. Analyze current progress in relation to the elapsed time. Determine if the project is on track, lagging, or ahead of schedule.
   3. Formulate a realistic forecast (prognosis) of the expected effort and timeline completion based on the current burn rate and historical comments.
   4. Summarize the text memo fields concisely: status description, project subject/objectives, and current problems.
-  5. Identify if the project is CRITICAL. Kriteria for critical rating: overall risk is red/yellow, significant progress lag, or high-severity issues reported in the status text field.
+  5. Identify if the project is CRITICAL. Kriteria for critical rating: overall risk is red/yellow, significant progress lag, overdue milestones, or high-severity issues reported in the status text field.
   6. Assess whether the project goals (Gegenstand) align with the current status and trajectory.
+  7. Summarize the milestone situation: how many are overdue vs. on track, and whether that endangers the project timeline.
   
   Return your analysis as a single JSON object with this exact key structure:
   {{
@@ -51,6 +55,11 @@ project_analysis_prompt: |
       "progress_percent": {progress_percent},
       "elapsed_time_percent": {elapsed_time_percent},
       "status_relative_to_deadline": "Assess progress relative to baseline start/end dates."
+    }},
+    "milestones_overview": {{
+      "total_count": {milestones_total},
+      "overdue_count": {milestones_overdue},
+      "summary": "Summarize which milestones are overdue and the impact on the schedule."
     }},
     "predictions": {{
       "estimated_remaining_hours": {estimated_remaining_hours},
@@ -86,7 +95,7 @@ portfolio_analysis_prompt: |
   
   INSTRUCTIONS:
   1. Synthesize the overall health of the portfolio.
-  2. List critical projects and highlight the key risks driving their criticality.
+  2. List critical projects and highlight the key risks driving their criticality (including overdue milestones, see each project's "milestones_overdue"/"milestones_total" fields).
   3. Identify potential cross-project dependencies or systemic risks (e.g. resource issues, systemic schedule delays).
   4. Provide recommended actions for the Problem Manager.
   
@@ -101,8 +110,10 @@ portfolio_analysis_prompt: |
       "status_distribution": {{
         "green": {green_count},
         "yellow": {yellow_count},
-        "red": {red_count}
-      }}
+        "red": {red_count},
+        "other": {other_count}
+      }},
+      "overdue_milestones_total": {overdue_milestones_total}
     }},
     "executive_summary": "High-level summary of the portfolio status, budget compliance, and trajectory.",
     "critical_projects_overview": [

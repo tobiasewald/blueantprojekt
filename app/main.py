@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import settings, CONFIG_PATH, PROMPTS_PATH
-from app.blueant_client import blueant_client
+from app.blueant_client import blueant_client, BlueAntAPIError
 from app.analysis_service import analysis_service
 
 app = FastAPI(
@@ -101,7 +101,10 @@ async def get_portfolios(token: Optional[str] = Depends(get_blueant_token)):
     """Fetch raw list of all portfolios from Blue Ant."""
     if not token:
         raise HTTPException(status_code=401, detail="Missing Blue Ant API key. Please provide it in the headers or query.")
-    portfolios = await blueant_client.get_portfolios(api_key=token)
+    try:
+        portfolios = await blueant_client.get_portfolios(api_key=token)
+    except BlueAntAPIError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     return {"portfolios": portfolios}
 
 @app.get("/api/portfolio/{portfolio_id}/analysis")
@@ -116,7 +119,7 @@ async def analyze_portfolio(
     
     analysis = await analysis_service.analyze_portfolio(portfolio_id, api_key=token, ollama_api_key=ollama_token)
     if "error" in analysis:
-        raise HTTPException(status_code=404, detail=analysis["error"])
+        raise HTTPException(status_code=analysis.get("status_code", 404), detail=analysis["error"])
     return analysis
 
 @app.get("/api/project/{project_id}/analysis")
@@ -131,7 +134,7 @@ async def analyze_project(
     
     analysis = await analysis_service.analyze_project(project_id, api_key=token, ollama_api_key=ollama_token)
     if "error" in analysis:
-        raise HTTPException(status_code=404, detail=analysis["error"])
+        raise HTTPException(status_code=analysis.get("status_code", 404), detail=analysis["error"])
     return analysis
 
 @app.get("/api/prompts")
@@ -209,9 +212,10 @@ async def update_config(payload: FullConfigUpdate):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False)
             
-        # Re-initialize configuration loader
+        # Re-initialize configuration loader (env vars still take precedence, matching startup behavior)
         settings.load_from_yaml()
-        
+        settings.load_from_env()
+
         return {"status": "success", "message": "config.yaml updated successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config.yaml: {str(e)}")

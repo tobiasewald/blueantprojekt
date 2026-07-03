@@ -6,6 +6,19 @@ document.addEventListener('DOMContentLoaded', () => {
     let statusChartInstance = null;
     let effortChartInstance = null;
 
+    // HTML-Escaping für alle aus Blue-Ant-Memos oder KI-Antworten stammenden Texte,
+    // bevor sie per innerHTML eingefügt werden (Memo-Felder dürfen laut Blue-Ant-API
+    // rohes HTML enthalten).
+    function escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     // Toast-Benachrichtigungssystem
     function showToast(message, type = 'info') {
         const container = document.getElementById('toast-container');
@@ -256,9 +269,11 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('stat-total-projects').textContent = metrics.total_projects || 0;
         document.getElementById('stat-critical-projects').textContent = metrics.critical_projects_count || 0;
         
-        const dist = metrics.status_distribution || { green: 0, yellow: 0, red: 0 };
+        const dist = metrics.status_distribution || { green: 0, yellow: 0, red: 0, other: 0 };
         document.getElementById('stat-green-projects').textContent = dist.green || 0;
         document.getElementById('stat-yellow-projects').textContent = dist.yellow || 0;
+        document.getElementById('stat-red-projects').textContent = dist.red || 0;
+        document.getElementById('stat-overdue-milestones').textContent = metrics.overdue_milestones_total || 0;
 
         // Kritisches Card blinken lassen, falls kritische Projekte vorhanden sind
         const criticalCard = document.getElementById('critical-projects-card');
@@ -294,13 +309,14 @@ document.addEventListener('DOMContentLoaded', () => {
         statusChartInstance = new Chart(ctx, {
             type: 'doughnut',
             data: {
-                labels: ['Grün', 'Gelb', 'Rot'],
+                labels: ['Grün', 'Gelb', 'Rot', 'Unbekannt'],
                 datasets: [{
-                    data: [distribution.green || 0, distribution.yellow || 0, distribution.red || 0],
+                    data: [distribution.green || 0, distribution.yellow || 0, distribution.red || 0, distribution.other || 0],
                     backgroundColor: [
                         '#10b981', // grün
                         '#f59e0b', // gelb
-                        '#ef4444'  // rot
+                        '#ef4444', // rot
+                        '#94a3b8'  // unbekannt/sonstige
                     ],
                     borderColor: 'rgba(255, 255, 255, 0.05)',
                     borderWidth: 2
@@ -410,8 +426,10 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.dataset.projectId = p.project_id;
             
             // Statusampel HTML aufbauen
-            const lightColor = (p.risk_assessment?.statusampel || 'green').toLowerCase();
-            let deColor = 'Grün';
+            const rawColor = (p.risk_assessment?.statusampel || '').toLowerCase();
+            const lightColor = ['green', 'yellow', 'red'].includes(rawColor) ? rawColor : 'other';
+            let deColor = 'Unbekannt';
+            if (lightColor === 'green') deColor = 'Grün';
             if (lightColor === 'yellow') deColor = 'Gelb';
             if (lightColor === 'red') deColor = 'Rot';
 
@@ -443,8 +461,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 : '<span class="criticality-pill criticality-low">Stabil</span>';
 
             tr.innerHTML = `
-                <td>#${p.project_id}</td>
-                <td><strong>${p.project_name || 'N/A'}</strong></td>
+                <td>#${escapeHtml(p.project_id)}</td>
+                <td><strong>${escapeHtml(p.project_name) || 'N/A'}</strong></td>
                 <td>${trafficLightHtml}</td>
                 <td>${plan.toLocaleString()} h</td>
                 <td>${ist.toLocaleString()} h</td>
@@ -490,6 +508,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const predictions = project.predictions || {};
         const summaries = project.text_summaries || {};
         const risk = project.risk_assessment || {};
+        const milestones = project.milestones_overview || {};
 
         // Kritikalitätsklasse formatieren
         const critLevel = (risk.criticality_level || 'low').toLowerCase();
@@ -510,14 +529,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (reasons.length > 0) {
             reasonsHtml = `
                 <ul class="reasons-list">
-                    ${reasons.map(r => `<li><i class="fa-solid fa-circle-exclamation text-yellow"></i> ${r}</li>`).join('')}
+                    ${reasons.map(r => `<li><i class="fa-solid fa-circle-exclamation text-yellow"></i> ${escapeHtml(r)}</li>`).join('')}
                 </ul>
             `;
         }
 
         // Projekt-Statusampel
-        const lightColor = (risk.statusampel || 'green').toLowerCase();
-        let deColor = 'Grün';
+        const rawColor = (risk.statusampel || '').toLowerCase();
+        const lightColor = ['green', 'yellow', 'red'].includes(rawColor) ? rawColor : 'other';
+        let deColor = 'Unbekannt';
+        if (lightColor === 'green') deColor = 'Grün';
         if (lightColor === 'yellow') deColor = 'Gelb';
         if (lightColor === 'red') deColor = 'Rot';
         const lightDotClass = `dot-${lightColor}`;
@@ -525,8 +546,8 @@ document.addEventListener('DOMContentLoaded', () => {
         projectDetailModalBody.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:1px solid var(--card-border); padding-bottom:12px;">
                 <div>
-                    <h2 style="font-size:22px; font-weight:700;">${project.project_name}</h2>
-                    <span style="color:var(--text-secondary); font-size:13px;">Projekt-Referenz-ID: #${project.project_id}</span>
+                    <h2 style="font-size:22px; font-weight:700;">${escapeHtml(project.project_name)}</h2>
+                    <span style="color:var(--text-secondary); font-size:13px;">Projekt-Referenz-ID: #${escapeHtml(project.project_id)}</span>
                 </div>
                 <div style="display:flex; gap:12px; align-items:center;">
                     <span class="traffic-indicator">
@@ -555,7 +576,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             ${(effort.variance_hours || 0) > 0 ? '+' : ''}${(effort.variance_hours || 0).toLocaleString()} Stunden (${effort.variance_percent || 0}%)
                         </span>
                     </div>
-                    <p style="margin-top:12px; font-size:13px; font-style:italic;">${effort.assessment || ''}</p>
+                    <p style="margin-top:12px; font-size:13px; font-style:italic;">${escapeHtml(effort.assessment)}</p>
                 </div>
 
                 <!-- Zeitplan & Fortschritt -->
@@ -571,8 +592,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="metric-details-row">
                         <span class="metric-details-label">Zeitplan-Status</span>
-                        <span class="metric-details-val">${progress.status_relative_to_deadline || 'N/A'}</span>
+                        <span class="metric-details-val">${escapeHtml(progress.status_relative_to_deadline) || 'N/A'}</span>
                     </div>
+                </div>
+
+                <!-- Meilensteine -->
+                <div class="ai-details-card">
+                    <h4><i class="fa-solid fa-flag-checkered"></i> Meilensteine</h4>
+                    <div class="metric-details-row">
+                        <span class="metric-details-label">Gesamt</span>
+                        <span class="metric-details-val">${milestones.total_count || 0}</span>
+                    </div>
+                    <div class="metric-details-row">
+                        <span class="metric-details-label">Überfällig</span>
+                        <span class="metric-details-val ${(milestones.overdue_count || 0) > 0 ? 'text-red' : 'text-green'}">${milestones.overdue_count || 0}</span>
+                    </div>
+                    <p style="margin-top:12px; font-size:13px; white-space:pre-line;">${escapeHtml(milestones.summary) || 'Keine Meilensteine hinterlegt.'}</p>
                 </div>
 
                 <!-- AI Prognose -->
@@ -589,19 +624,19 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div class="metric-details-row" style="flex-direction:column; align-items:flex-start; border-bottom:none;">
                             <span class="metric-details-label">Erwarteter Fertigstellungstermin</span>
-                            <span class="metric-details-val" style="font-size:16px; margin-top:4px; color:var(--primary);">${predictions.expected_completion_date || 'N/A'}</span>
+                            <span class="metric-details-val" style="font-size:16px; margin-top:4px; color:var(--primary);">${escapeHtml(predictions.expected_completion_date) || 'N/A'}</span>
                         </div>
                     </div>
                     <div style="padding-top:10px; border-top:1px solid var(--card-border);">
-                        <p style="font-size:14px; margin-bottom:4px;"><strong>Trendprognose:</strong> ${predictions.prognosis_text || ''}</p>
-                        <span class="badge badge-purple" style="display:inline-block; margin-top:6px;">Konfidenzniveau: ${predictions.prognosis_confidence || 'mittel'}</span>
+                        <p style="font-size:14px; margin-bottom:4px;"><strong>Trendprognose:</strong> ${escapeHtml(predictions.prognosis_text)}</p>
+                        <span class="badge badge-purple" style="display:inline-block; margin-top:6px;">Konfidenzniveau: ${escapeHtml(predictions.prognosis_confidence) || 'mittel'}</span>
                     </div>
                 </div>
 
                 <!-- Risikobewertung -->
                 <div class="ai-details-card span-all">
                     <h4><i class="fa-solid fa-triangle-exclamation"></i> Risiken & Einhaltung der Projektziele</h4>
-                    <p style="margin-bottom:8px;"><strong>Projektziel-Konformität:</strong> ${risk.goals_vs_status_eval || 'Keine Konformitätskonflikte identifiziert.'}</p>
+                    <p style="margin-bottom:8px;"><strong>Projektziel-Konformität:</strong> ${escapeHtml(risk.goals_vs_status_eval) || 'Keine Konformitätskonflikte identifiziert.'}</p>
                     <p><strong>Warnsignale:</strong></p>
                     ${reasonsHtml}
                 </div>
@@ -612,15 +647,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px;">
                         <div>
                             <span class="metric-details-label" style="font-weight:600; display:block; margin-bottom:6px;">Status-Notiz</span>
-                            <p style="font-size:13.5px;">${summaries.status_summary || 'Keine Notizen.'}</p>
+                            <p style="font-size:13.5px;">${escapeHtml(summaries.status_summary) || 'Keine Notizen.'}</p>
                         </div>
                         <div>
                             <span class="metric-details-label" style="font-weight:600; display:block; margin-bottom:6px;">Gegenstands-Notiz</span>
-                            <p style="font-size:13.5px;">${summaries.subject_summary || 'Keine Notizen.'}</p>
+                            <p style="font-size:13.5px;">${escapeHtml(summaries.subject_summary) || 'Keine Notizen.'}</p>
                         </div>
                         <div>
                             <span class="metric-details-label" style="font-weight:600; display:block; margin-bottom:6px;">Problem-Notiz</span>
-                            <p style="font-size:13.5px;">${summaries.problems_summary || 'Keine Notizen.'}</p>
+                            <p style="font-size:13.5px;">${escapeHtml(summaries.problems_summary) || 'Keine Notizen.'}</p>
                         </div>
                     </div>
                 </div>

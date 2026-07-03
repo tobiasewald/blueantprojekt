@@ -1,8 +1,11 @@
 import os
 import yaml
 import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.config import PROMPTS_PATH
+from app.kpi_utils import extract_effort_kpis
+from app.milestone_utils import summarize_milestones
+
 
 class PromptEngine:
     def __init__(self):
@@ -43,11 +46,32 @@ class PromptEngine:
         self._load_prompts()
         return self._prompts.get("project_analysis_prompt", "")
 
+    @property
+    def portfolio_analysis_prompt_template(self) -> str:
+        self._load_prompts()
+        return self._prompts.get("portfolio_analysis_prompt", "")
+
+    @staticmethod
+    def _parse_datetime_utc(value: str) -> Optional[datetime.datetime]:
+        """Parse either a date-only string ("2018-09-21") or a full ISO datetime
+        into a timezone-aware UTC datetime. Blue Ant's project start/end fields are
+        date-only, which previously produced a naive datetime and crashed when
+        compared against a timezone-aware "now"."""
+        if not value:
+            return None
+        try:
+            date_part = value.replace("Z", "+00:00").split("T")[0]
+            d = datetime.date.fromisoformat(date_part)
+            return datetime.datetime(d.year, d.month, d.day, tzinfo=datetime.timezone.utc)
+        except ValueError:
+            return None
+
     def format_project_prompt(
         self,
         project: Dict[str, Any],
         kpis: List[Dict[str, Any]],
-        status_history: List[Dict[str, Any]]
+        status_history: List[Dict[str, Any]],
+        milestones: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         self._load_prompts()
 
@@ -57,107 +81,41 @@ class PromptEngine:
         project_number = project.get("number", "N/A")
         start_date = project.get("start", "")
         end_date = project.get("end", "")
-        
-        # Risk traffic light (Statusampel)
+
+        # Risk traffic light (Statusampel) - already resolved to {id, name, color, assessment}
+        # by BlueAntClient; keep the isinstance checks so hand-crafted test fixtures
+        # (or a raw upstream payload) still work.
         overall_risk_obj = project.get("overallRisk")
         overall_risk = "N/A"
         if isinstance(overall_risk_obj, dict):
             overall_risk = overall_risk_obj.get("color") or overall_risk_obj.get("name") or "N/A"
         elif isinstance(overall_risk_obj, str):
             overall_risk = overall_risk_obj
-            
-        status_memo = project.get("statusMemo", "None")
-        subject_memo = project.get("subjectMemo", "None")
-        problem_memo = project.get("problemMemo", "None")
+
+        # `.get(key, default)` only applies the default when the key is missing, not
+        # when Blue Ant returns an explicit null for an empty memo field - use `or`.
+        status_memo = project.get("statusMemo") or "None"
+        subject_memo = project.get("subjectMemo") or "None"
+        problem_memo = project.get("problemMemo") or "None"
 
         # Parse KPIs for numerical calculations and overview
-        planned_hours = 0.0
-        actual_hours = 0.0
-        progress_percent = 0.0
-        kpi_lines = []
-        
-        # Track priority strength (to prevent sub-budgets from overwriting main metrics)
-        planned_strength = 0
-        actual_strength = 0
-        
-        for k in kpis:
-            if k.get("period", "TOTAL") != "TOTAL":
-                continue
-            
-            k_id = k.get("id", "")
-            name = k.get("name", "")
-            name_lower = name.lower()
-            val = float(k.get("value", 0.0) or 0.0)
-            unit = k.get("unit", "") or ""
-            
-            # Convert Person Days (PT) to Hours (h)
-            if unit == "PT":
-                val = val * 8.0
-                unit = "h"
-            
-            kpi_lines.append(f"- {name}: {val} {unit}".strip())
-            
-            if k_id == "SubjectiveProgress":
-                progress_percent = val
-            elif "fortschritt" in name_lower or "progress" in name_lower or "fertigstellung" in name_lower:
-                if k_id == "SubjectiveProgress" or progress_percent == 0.0:
-                    progress_percent = val
-            
-            # Planned hours matching priority
-            if k_id == "WorkTotalPlan":
-                planned_hours = val
-                planned_strength = 3
-            elif k_id == "ProjectBudgetWorkPlan":
-                if planned_strength < 3:
-                    planned_hours = val
-                    planned_strength = 2
-            elif k_id == "BudgetPlanWork":
-                if planned_strength < 2:
-                    planned_hours = val
-                    planned_strength = 1
-            elif ("plan" in name_lower or "basisplan" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
-                if "teilprojekt" not in name_lower and "ticket" not in name_lower and "mehrarbeit" not in name_lower:
-                    if planned_strength == 0:
-                        planned_hours = val
-            
-            # Actual hours matching priority
-            if k_id == "WorkTotalActual":
-                actual_hours = val
-                actual_strength = 3
-            elif k_id == "ProjectBudgetWorkActual":
-                if actual_strength < 3:
-                    actual_hours = val
-                    actual_strength = 2
-            elif k_id == "BudgetIsWork":
-                if actual_strength < 2:
-                    actual_hours = val
-                    actual_strength = 1
-            elif ("ist" in name_lower or "actual" in name_lower) and ("aufwand" in name_lower or "arbeit" in name_lower or "effort" in name_lower):
-                if "teilprojekt" not in name_lower and "ticket" not in name_lower and "mehrarbeit" not in name_lower:
-                    if actual_strength == 0:
-                        actual_hours = val
-
-        kpis_summary = "\n".join(kpi_lines) if kpi_lines else "No KPIs available."
-        variance_hours = actual_hours - planned_hours
-        variance_percent = (variance_hours / planned_hours * 100.0) if planned_hours > 0 else 0.0
+        effort = extract_effort_kpis(kpis)
+        planned_hours = effort["planned_hours"]
+        actual_hours = effort["actual_hours"]
+        progress_percent = effort["progress_percent"]
+        variance_hours = effort["variance_hours"]
+        variance_percent = effort["variance_percent"]
+        kpis_summary = effort["kpis_summary"]
 
         # Calculate timeline percentages
         elapsed_time_percent = 0.0
         now = datetime.datetime.now(datetime.timezone.utc)
-        if start_date and end_date:
-            try:
-                # Replace typical ISO format suffix
-                s_date = start_date.replace("Z", "+00:00")
-                e_date = end_date.replace("Z", "+00:00")
-                start_dt = datetime.datetime.fromisoformat(s_date)
-                end_dt = datetime.datetime.fromisoformat(e_date)
-                
-                if end_dt > start_dt:
-                    total_dur = (end_dt - start_dt).total_seconds()
-                    elapsed_dur = (now - start_dt).total_seconds()
-                    elapsed_time_percent = max(0.0, min(100.0, (elapsed_dur / total_dur) * 100.0))
-            except Exception:
-                pass
+        start_dt = self._parse_datetime_utc(start_date)
+        end_dt = self._parse_datetime_utc(end_date)
+        if start_dt and end_dt and end_dt > start_dt:
+            total_dur = (end_dt - start_dt).total_seconds()
+            elapsed_dur = (now - start_dt).total_seconds()
+            elapsed_time_percent = max(0.0, min(100.0, (elapsed_dur / total_dur) * 100.0))
 
         # Estimate remaining hours (prognosis calculation)
         estimated_remaining_hours = 0.0
@@ -168,12 +126,20 @@ class PromptEngine:
         else:
             # Fallback to planned minus actual if no progress recorded
             estimated_remaining_hours = max(0.0, planned_hours - actual_hours)
-            
+
         forecasted_total_hours = actual_hours + estimated_remaining_hours
+
+        # Meilensteine (milestones)
+        milestone_summary = summarize_milestones(milestones or [])
 
         # Determine if critical based on rules (for prompt formatting helper values)
         is_critical_bool = "false"
-        if overall_risk.lower() in ["red", "yellow"] or variance_percent > 15.0 or "problem" in problem_memo.lower():
+        if (
+            overall_risk.lower() in ["red", "yellow"]
+            or variance_percent > 15.0
+            or "problem" in problem_memo.lower()
+            or milestone_summary["overdue_count"] > 0
+        ):
             is_critical_bool = "true"
 
         # Format status history log
@@ -184,7 +150,7 @@ class PromptEngine:
             old_status = h.get("oldStatusId", {}).get("name", "Unknown") if isinstance(h.get("oldStatusId"), dict) else "Unknown"
             new_status = h.get("newStatusId", {}).get("name", "Unknown") if isinstance(h.get("newStatusId"), dict) else "Unknown"
             history_lines.append(f"[{date_str}] Status changed from {old_status} to {new_status}. Comment: {comment}")
-            
+
         status_history_str = "\n".join(history_lines) if history_lines else "No status history comments recorded."
 
         # Format prompt template
@@ -200,6 +166,9 @@ class PromptEngine:
             problem_memo=problem_memo,
             kpis_summary=kpis_summary,
             status_history=status_history_str,
+            milestones_summary=milestone_summary["summary_text"],
+            milestones_total=milestone_summary["total_count"],
+            milestones_overdue=milestone_summary["overdue_count"],
             current_timestamp=now.isoformat(),
             planned_hours=planned_hours,
             actual_hours=actual_hours,
@@ -213,6 +182,7 @@ class PromptEngine:
         )
 
         return formatted_prompt
+
 
 # Global instance of prompt engine
 prompt_engine = PromptEngine()

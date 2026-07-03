@@ -9,15 +9,61 @@ os.environ["OLLAMA_API_KEY"] = "mock-ollama-key"
 
 from app.config import settings
 from app.prompt_engine import prompt_engine
-from app.blueant_client import blueant_client
+from app.blueant_client import blueant_client, normalize_risk_color
+from app.kpi_utils import extract_effort_kpis
+from app.milestone_utils import summarize_milestones
 from app.analysis_service import analysis_service
 from app.main import app
+
 
 class TestConfig(unittest.TestCase):
     def test_settings_load(self):
         self.assertEqual(settings.blueant_api_key, "mock-blueant-key")
         self.assertEqual(settings.ollama_api_key, "mock-ollama-key")
         self.assertTrue(settings.blueant_url.startswith("http"))
+
+
+class TestKpiUtils(unittest.TestCase):
+    def test_priority_matching_prefers_total_kpi_over_subproject(self):
+        kpis = [
+            {"id": "SomeSubBudgetTeilprojektAufwandPlan", "name": "Teilprojekt Plan-Aufwand", "value": 10.0, "unit": "h"},
+            {"id": "WorkTotalPlan", "name": "Gesamtaufwand Plan", "value": 100.0, "unit": "h"},
+        ]
+        result = extract_effort_kpis(kpis)
+        self.assertEqual(result["planned_hours"], 100.0)
+
+    def test_pt_converted_to_hours(self):
+        kpis = [{"id": "WorkTotalPlan", "name": "Plan", "value": 5.0, "unit": "PT"}]
+        result = extract_effort_kpis(kpis)
+        self.assertEqual(result["planned_hours"], 40.0)
+
+
+class TestMilestoneUtils(unittest.TestCase):
+    def test_overdue_milestone_detected(self):
+        import datetime
+        milestones = [
+            {"description": "Kickoff", "endWished": "2020-01-01", "end": "2020-01-01", "progressActual": 100},
+            {"description": "Go-Live", "endWished": "2020-01-01", "end": None, "progressActual": 40},
+        ]
+        result = summarize_milestones(milestones, today=datetime.date(2026, 1, 1))
+        self.assertEqual(result["total_count"], 2)
+        self.assertEqual(result["completed_count"], 1)
+        self.assertEqual(result["overdue_count"], 1)
+
+    def test_no_milestones(self):
+        result = summarize_milestones([])
+        self.assertEqual(result["total_count"], 0)
+        self.assertEqual(result["overdue_count"], 0)
+
+
+class TestRiskColorNormalization(unittest.TestCase):
+    def test_recognizes_german_and_english_names(self):
+        self.assertEqual(normalize_risk_color("Rot"), "red")
+        self.assertEqual(normalize_risk_color("Yellow"), "yellow")
+        self.assertEqual(normalize_risk_color("Grün"), "green")
+        self.assertEqual(normalize_risk_color(None), "unbekannt")
+        self.assertEqual(normalize_risk_color("Sonderfall"), "sonderfall")
+
 
 class TestPromptEngine(unittest.TestCase):
     def test_format_project_prompt(self):
@@ -40,9 +86,9 @@ class TestPromptEngine(unittest.TestCase):
         status_history = [
             {"date": "2026-02-15", "comment": "Initial status", "oldStatusId": {"name": "Draft"}, "newStatusId": {"name": "Active"}}
         ]
-        
+
         prompt = prompt_engine.format_project_prompt(project, kpis, status_history)
-        
+
         self.assertIn("Super Test Project", prompt)
         self.assertIn("P-42", prompt)
         self.assertIn("Plan-Aufwand: 100.0 h", prompt)
@@ -50,39 +96,77 @@ class TestPromptEngine(unittest.TestCase):
         self.assertIn("red", prompt)
         self.assertIn("Status changed from Draft to Active", prompt)
 
+    def test_date_only_start_end_does_not_crash_and_computes_progress(self):
+        """Regression test: Blue Ant returns start/end as date-only strings
+        ("2018-09-21"), not full ISO datetimes. This previously produced a naive
+        datetime that crashed when compared against a timezone-aware "now"."""
+        project = {
+            "id": 1, "name": "Date Test", "number": "P-1",
+            "start": "2020-01-01", "end": "2030-01-01",
+        }
+        prompt = prompt_engine.format_project_prompt(project, [], [])
+        self.assertNotIn("elapsed_time_percent=0.0", prompt.replace(" ", ""))
+
+    def test_null_memo_fields_do_not_crash(self):
+        """Regression test: project.get("problemMemo", "None") returns None (not
+        the string default) when Blue Ant sends an explicit null, which used to
+        crash on problem_memo.lower()."""
+        project = {
+            "id": 2, "name": "Null Memo Test", "number": "P-2",
+            "start": "2026-01-01", "end": "2026-06-01",
+            "statusMemo": None, "subjectMemo": None, "problemMemo": None,
+        }
+        # Should not raise
+        prompt = prompt_engine.format_project_prompt(project, [], [])
+        self.assertIn("Null Memo Test", prompt)
+
+    def test_overdue_milestone_marks_project_critical(self):
+        project = {"id": 3, "name": "Milestone Test", "number": "P-3"}
+        milestones = [
+            {"description": "Meilenstein 1", "endWished": "2020-01-01", "end": None, "progressActual": 10},
+        ]
+        prompt = prompt_engine.format_project_prompt(project, [], [], milestones)
+        self.assertIn("is_critical", prompt)
+
+
 class TestBlueAntClientCaching(unittest.IsolatedAsyncioTestCase):
     @patch("httpx.AsyncClient.request")
     async def test_api_caching(self, mock_request):
-        # Configure mock response
+        # Configure mock response (used for both the projects list and the
+        # overall-risk masterdata lookup that get_projects() now also performs)
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"projects": [{"id": 1, "name": "Cached Project"}]}
+        mock_response.json.return_value = {"projects": [{"id": 1, "name": "Cached Project"}], "risks": []}
         mock_request.return_value = mock_response
-        
+
         # Clear cache first
         blueant_client.clear_cache()
-        
-        # First call (should hit mock API)
+
+        # First call (should hit mock API for the project list + the risk masterdata)
         res1 = await blueant_client.get_projects(api_key="test-key")
         self.assertEqual(res1[0]["name"], "Cached Project")
-        self.assertEqual(mock_request.call_count, 1)
-        
-        # Second call (should hit cache, mock API call count should remain 1)
+        first_call_count = mock_request.call_count
+        self.assertGreaterEqual(first_call_count, 1)
+
+        # Second call (should hit cache for both, no additional HTTP calls)
         res2 = await blueant_client.get_projects(api_key="test-key")
         self.assertEqual(res2[0]["name"], "Cached Project")
-        self.assertEqual(mock_request.call_count, 1)
+        self.assertEqual(mock_request.call_count, first_call_count)
+
 
 class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
     @patch("app.blueant_client.BlueAntClient.get_project")
     @patch("app.blueant_client.BlueAntClient.get_project_kpis")
     @patch("app.blueant_client.BlueAntClient.get_project_status_history")
+    @patch("app.blueant_client.BlueAntClient.get_project_milestones")
     @patch("app.llm_client.LLMClient.generate_analysis")
-    async def test_analyze_project_success(self, mock_llm, mock_history, mock_kpis, mock_project):
+    async def test_analyze_project_success(self, mock_llm, mock_milestones, mock_history, mock_kpis, mock_project):
         # Configure mocks
         mock_project.return_value = {"id": 1, "name": "Proj 1"}
         mock_kpis.return_value = [{"name": "Plan-Aufwand", "value": 100.0}]
         mock_history.return_value = []
-        
+        mock_milestones.return_value = []
+
         mock_llm.return_value = """
         {
             "project_id": 1,
@@ -121,7 +205,7 @@ class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
             }
         }
         """
-        
+
         result = await analysis_service.analyze_project(project_id=1, api_key="test-key")
         self.assertEqual(result["project_id"], 1)
         self.assertEqual(result["risk_assessment"]["statusampel"], "green")
@@ -130,8 +214,9 @@ class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
     @patch("app.blueant_client.BlueAntClient.get_project")
     @patch("app.blueant_client.BlueAntClient.get_project_kpis")
     @patch("app.blueant_client.BlueAntClient.get_project_status_history")
+    @patch("app.blueant_client.BlueAntClient.get_project_milestones")
     @patch("app.llm_client.LLMClient.generate_analysis")
-    async def test_analyze_project_fallback_on_llm_error(self, mock_llm, mock_history, mock_kpis, mock_project):
+    async def test_analyze_project_fallback_on_llm_error(self, mock_llm, mock_milestones, mock_history, mock_kpis, mock_project):
         # Configure mocks to simulate LLM fail
         mock_project.return_value = {"id": 1, "name": "Proj 1", "overallRisk": {"color": "red"}}
         mock_kpis.return_value = [
@@ -139,8 +224,9 @@ class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
             {"name": "Ist-Aufwand", "value": 120.0}
         ]
         mock_history.return_value = []
+        mock_milestones.return_value = []
         mock_llm.return_value = None  # Simulates failure
-        
+
         result = await analysis_service.analyze_project(project_id=1, api_key="test-key")
         self.assertEqual(result["project_id"], 1)
         self.assertEqual(result["effort_analysis"]["planned_hours"], 100.0)
@@ -149,6 +235,32 @@ class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["risk_assessment"]["statusampel"], "red")
         self.assertTrue(result["risk_assessment"]["is_critical"])
         self.assertIn("fallback", result["effort_analysis"]["assessment"].lower())
+
+    @patch("app.blueant_client.BlueAntClient.get_project")
+    @patch("app.blueant_client.BlueAntClient.get_project_kpis")
+    @patch("app.blueant_client.BlueAntClient.get_project_status_history")
+    @patch("app.blueant_client.BlueAntClient.get_project_milestones")
+    @patch("app.llm_client.LLMClient.generate_analysis")
+    async def test_analyze_project_null_memo_does_not_500(self, mock_llm, mock_milestones, mock_history, mock_kpis, mock_project):
+        """Regression test for the null-memo crash: a project with problemMemo=None
+        must still produce a fallback analysis instead of raising."""
+        mock_project.return_value = {"id": 5, "name": "Proj Null Memo", "problemMemo": None, "statusMemo": None, "subjectMemo": None}
+        mock_kpis.return_value = []
+        mock_history.return_value = []
+        mock_milestones.return_value = []
+        mock_llm.return_value = None
+
+        result = await analysis_service.analyze_project(project_id=5, api_key="test-key")
+        self.assertEqual(result["project_id"], 5)
+        self.assertNotIn("error", result)
+
+    @patch("app.blueant_client.BlueAntClient.get_project")
+    async def test_analyze_project_not_found(self, mock_project):
+        mock_project.return_value = None
+        result = await analysis_service.analyze_project(project_id=999, api_key="test-key")
+        self.assertIn("error", result)
+        self.assertEqual(result["status_code"], 404)
+
 
 class TestFastAPIEndpoints(unittest.TestCase):
     def setUp(self):
@@ -180,4 +292,3 @@ class TestFastAPIEndpoints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

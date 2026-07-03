@@ -554,6 +554,7 @@ body {
 .dot-red { background-color: var(--danger); box-shadow: 0 0 8px var(--danger); }
 .dot-yellow { background-color: var(--warning); box-shadow: 0 0 8px var(--warning); }
 .dot-green { background-color: var(--success); box-shadow: 0 0 8px var(--success); }
+.dot-other { background-color: #94a3b8; box-shadow: 0 0 8px #94a3b8; }
 
 /* Tab Visibility Logic */
 .tab-content {
