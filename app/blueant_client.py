@@ -11,10 +11,18 @@ logging.basicConfig(level=logging.INFO)
 # free text configured per instance, e.g. "Rot"/"Gelb"/"Grün" or "Red/Yellow/Green")
 # into the red/yellow/green traffic-light buckets the dashboard understands.
 _RISK_COLOR_KEYWORDS = {
-    "red": ("rot", "red", "kritisch", "critical"),
-    "yellow": ("gelb", "yellow", "amber", "orange", "warn"),
-    "green": ("grün", "gruen", "green", "ok"),
+    "red": ("rot", "red", "kritisch", "critical", "hoch", "high"),
+    "yellow": ("gelb", "yellow", "amber", "orange", "warn", "mittel", "medium"),
+    "green": ("grün", "gruen", "green", "ok", "gering", "niedrig", "low"),
 }
+
+
+# The task's "individuelle Listbox Statusampel" is a custom Blue Ant project
+# field (confirmed via /v1/masterdata/customfield/definitions/Project against
+# the live demo tenant), not the built-in "overallRisk" field - which is null
+# for every project in that tenant. This custom field is checked first; the
+# built-in overallRisk masterdata is used as a fallback if it isn't set.
+STATUSAMPEL_CUSTOM_FIELD_NAME = "Status Ampel manuell"
 
 
 def normalize_risk_color(name: Optional[str]) -> str:
@@ -118,7 +126,10 @@ class BlueAntClient:
         """id -> risk-level name, e.g. {1: "Rot", 2: "Gelb", 3: "Grün"}."""
         try:
             res = await self._request("GET", "/v1/masterdata/projects/overallrisks", api_key=api_key)
-            return {r.get("id"): r.get("name") for r in res.get("risks", [])}
+            risks = res.get("risks", [])
+            risk_map = {r.get("id"): r.get("name") for r in risks}
+            logger.info(f"Overall risk masterdata loaded ({len(risk_map)} entries): {risk_map}")
+            return risk_map
         except Exception as e:
             logger.error(f"Failed to fetch overall risk masterdata: {e}")
             return {}
@@ -127,7 +138,9 @@ class BlueAntClient:
         """id -> workflow status text, e.g. {1: "Aktiv", 2: "Abgeschlossen"}."""
         try:
             res = await self._request("GET", "/v1/masterdata/projects/statuses", api_key=api_key)
-            return {s.get("id"): s.get("text") for s in res.get("statuses", [])}
+            status_map = {s.get("id"): s.get("text") for s in res.get("projectStatus", [])}
+            logger.info(f"Project status masterdata loaded ({len(status_map)} entries): {status_map}")
+            return status_map
         except Exception as e:
             logger.error(f"Failed to fetch project status masterdata: {e}")
             return {}
@@ -138,15 +151,62 @@ class BlueAntClient:
         color/name directly."""
         risk_obj = project.get("overallRisk")
         if not isinstance(risk_obj, dict):
+            logger.info(f"Project {project.get('id')}: overallRisk is not an object ({risk_obj!r}), leaving unresolved.")
             return
         risk_id = risk_obj.get("overallRiskId")
         name = risk_map.get(risk_id)
+        if name is None:
+            logger.warning(f"Project {project.get('id')}: overallRiskId {risk_id!r} not found in risk map ({list(risk_map.keys())}).")
         project["overallRisk"] = {
             "id": risk_id,
             "name": name or "Unbekannt",
             "color": normalize_risk_color(name),
             "assessment": risk_obj.get("riskAssessment", ""),
         }
+
+    async def _get_statusampel_field(self, api_key: Optional[str] = None) -> "tuple[Optional[int], Dict[str, str]]":
+        """Look up the id and option map (option key -> label) of the custom
+        'Status Ampel manuell' listbox field, which is the actual field the task
+        description means by "individuelle Listbox Statusampel"."""
+        try:
+            fields = await self.get_custom_field_definitions("Project", api_key=api_key)
+        except Exception as e:
+            logger.error(f"Failed to fetch custom field definitions: {e}")
+            return None, {}
+        for f in fields:
+            if f.get("name") == STATUSAMPEL_CUSTOM_FIELD_NAME:
+                options = {str(o.get("key")): o.get("value") for o in f.get("options", [])}
+                return f.get("id"), options
+        logger.warning(f"Custom field '{STATUSAMPEL_CUSTOM_FIELD_NAME}' not found in Project custom field definitions.")
+        return None, {}
+
+    def _resolve_statusampel(
+        self,
+        project: Dict[str, Any],
+        statusampel_field_id: Optional[int],
+        statusampel_options: Dict[str, str],
+        risk_map: Dict[Any, str],
+    ) -> None:
+        """Resolve the Statusampel primarily from the custom 'Status Ampel manuell'
+        listbox field; fall back to the built-in overallRisk field if the custom
+        field isn't set for this project."""
+        custom_fields = project.get("customFields") or {}
+        raw_value = custom_fields.get(str(statusampel_field_id)) if statusampel_field_id else None
+        name = statusampel_options.get(str(raw_value)) if raw_value is not None else None
+
+        if name:
+            existing_risk = project.get("overallRisk")
+            assessment = existing_risk.get("riskAssessment", "") if isinstance(existing_risk, dict) else ""
+            project["overallRisk"] = {
+                "id": raw_value,
+                "name": name,
+                "color": normalize_risk_color(name),
+                "assessment": assessment,
+            }
+            return
+
+        # Custom field not set for this project - fall back to the built-in field.
+        self._resolve_overall_risk(project, risk_map)
 
     async def get_portfolios(self, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch all portfolios from Blue Ant."""
@@ -174,8 +234,9 @@ class BlueAntClient:
             return []
 
         risk_map = await self._get_overall_risk_map(api_key=api_key)
+        statusampel_field_id, statusampel_options = await self._get_statusampel_field(api_key=api_key)
         for p in projects:
-            self._resolve_overall_risk(p, risk_map)
+            self._resolve_statusampel(p, statusampel_field_id, statusampel_options, risk_map)
         return projects
 
     async def get_project(self, project_id: int, api_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -189,8 +250,14 @@ class BlueAntClient:
         project = res.get("project")
         if project:
             risk_map = await self._get_overall_risk_map(api_key=api_key)
-            self._resolve_overall_risk(project, risk_map)
+            statusampel_field_id, statusampel_options = await self._get_statusampel_field(api_key=api_key)
+            self._resolve_statusampel(project, statusampel_field_id, statusampel_options, risk_map)
         return project
+
+    async def get_custom_field_definitions(self, contexttype: str, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List custom field definitions (name, type, listbox options) for a context type."""
+        res = await self._request("GET", f"/v1/masterdata/customfield/definitions/{contexttype}", api_key=api_key)
+        return res.get("customFields", [])
 
     async def get_project_kpis(self, project_id: int, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch KPIs for a specific project."""

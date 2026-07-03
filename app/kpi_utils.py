@@ -84,10 +84,10 @@ def extract_effort_kpis(kpis: List[Dict[str, Any]]) -> Dict[str, Any]:
     variance_percent = (variance_hours / planned_hours * 100.0) if planned_hours > 0 else 0.0
 
     return {
-        "planned_hours": planned_hours,
-        "actual_hours": actual_hours,
-        "progress_percent": progress_percent,
-        "variance_hours": variance_hours,
+        "planned_hours": round(planned_hours, 2),
+        "actual_hours": round(actual_hours, 2),
+        "progress_percent": round(progress_percent, 2),
+        "variance_hours": round(variance_hours, 2),
         "variance_percent": round(variance_percent, 2),
         "kpis_summary": kpis_summary,
     }

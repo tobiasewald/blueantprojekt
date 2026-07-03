@@ -64,6 +64,35 @@ class TestRiskColorNormalization(unittest.TestCase):
         self.assertEqual(normalize_risk_color(None), "unbekannt")
         self.assertEqual(normalize_risk_color("Sonderfall"), "sonderfall")
 
+    def test_recognizes_severity_level_naming(self):
+        """Regression test: the live demo tenant uses severity levels
+        ("A - gering", "B - mittel", "C - hoch") instead of traffic-light colors."""
+        self.assertEqual(normalize_risk_color("C - hoch"), "red")
+        self.assertEqual(normalize_risk_color("B - mittel"), "yellow")
+        self.assertEqual(normalize_risk_color("A - gering"), "green")
+
+
+class TestStatusampelResolution(unittest.TestCase):
+    """Regression tests for resolving the Statusampel from the custom 'Status Ampel
+    manuell' listbox field (confirmed against the live demo tenant), with the
+    built-in overallRisk field as fallback when the custom field isn't set."""
+
+    def test_custom_field_takes_priority(self):
+        project = {"id": 1, "customFields": {"999": "2"}}
+        blueant_client._resolve_statusampel(project, 999, {"2": "Gelb"}, {})
+        self.assertEqual(project["overallRisk"]["color"], "yellow")
+        self.assertEqual(project["overallRisk"]["name"], "Gelb")
+
+    def test_falls_back_to_overall_risk_when_custom_field_unset(self):
+        project = {"id": 2, "overallRisk": {"overallRiskId": 5, "riskAssessment": "x"}}
+        blueant_client._resolve_statusampel(project, 999, {"2": "Gelb"}, {5: "C - hoch"})
+        self.assertEqual(project["overallRisk"]["color"], "red")
+
+    def test_no_data_available_leaves_unresolved(self):
+        project = {"id": 3}
+        blueant_client._resolve_statusampel(project, None, {}, {})
+        self.assertNotIn("overallRisk", project)
+
 
 class TestPromptEngine(unittest.TestCase):
     def test_format_project_prompt(self):
