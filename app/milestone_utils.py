@@ -1,8 +1,8 @@
 import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
-def _parse_date(value: Any) -> "datetime.date | None":
+def _parse_date(value: Any) -> Optional[datetime.date]:
     if not value or not isinstance(value, str):
         return None
     try:
@@ -12,15 +12,23 @@ def _parse_date(value: Any) -> "datetime.date | None":
         return None
 
 
-def summarize_milestones(milestones: List[Dict[str, Any]], today: "datetime.date | None" = None) -> Dict[str, Any]:
+def _milestone_due_date(milestone: Dict[str, Any]) -> Optional[datetime.date]:
+    """Determine the date a milestone is due.
+
+    Blue Ant only fills "endWished" when the user set an explicit date constraint;
+    otherwise the scheduled date lives in "end". For a milestone "start" and "end"
+    are the same instant, because a milestone is a point in time rather than a span
+    - so "end" is the planned date, NOT a completion date.
+    """
+    return _parse_date(milestone.get("endWished")) or _parse_date(milestone.get("end"))
+
+
+def summarize_milestones(milestones: List[Dict[str, Any]], today: Optional[datetime.date] = None) -> Dict[str, Any]:
     """Build a plan-vs-actual overview of a project's milestones.
 
-    Blue Ant exposes milestones as planning entries with entryType "milestone".
-    - startWished/endWished: planned dates
-    - start/end: actual dates (set once the milestone has actually started/finished)
-    - progressActual: 0-100
-    A milestone counts as overdue if its planned end date has passed and it has
-    not been completed (no actual end date / progress below 100).
+    Completion is read from "progressActual" (0-100), which is the only reliable
+    completion signal Blue Ant exposes for planning entries. A milestone counts as
+    overdue when its due date has passed and it is not yet complete.
     """
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
 
@@ -30,11 +38,10 @@ def summarize_milestones(milestones: List[Dict[str, Any]], today: "datetime.date
 
     for m in milestones:
         name = m.get("description") or m.get("name") or "Unbenannter Meilenstein"
-        planned_end = _parse_date(m.get("endWished"))
-        actual_end = _parse_date(m.get("end"))
+        due_date = _milestone_due_date(m)
         progress = float(m.get("progressActual", 0.0) or 0.0)
-        is_completed = progress >= 100.0 or actual_end is not None
-        is_overdue = (not is_completed) and planned_end is not None and planned_end < today
+        is_completed = progress >= 100.0
+        is_overdue = (not is_completed) and due_date is not None and due_date < today
 
         if is_completed:
             completed_count += 1
@@ -43,8 +50,7 @@ def summarize_milestones(milestones: List[Dict[str, Any]], today: "datetime.date
 
         entries.append({
             "name": name,
-            "planned_end": m.get("endWished"),
-            "actual_end": m.get("end"),
+            "due_date": due_date.isoformat() if due_date else None,
             "progress_percent": progress,
             "completed": is_completed,
             "overdue": is_overdue,
@@ -54,7 +60,7 @@ def summarize_milestones(milestones: List[Dict[str, Any]], today: "datetime.date
     for e in entries:
         status = "erledigt" if e["completed"] else ("ÜBERFÄLLIG" if e["overdue"] else "offen")
         lines.append(
-            f"- {e['name']}: geplant bis {e['planned_end'] or 'N/A'}, Fortschritt {e['progress_percent']}% ({status})"
+            f"- {e['name']}: geplant zum {e['due_date'] or 'N/A'}, Fortschritt {e['progress_percent']}% ({status})"
         )
 
     return {

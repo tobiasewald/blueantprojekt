@@ -291,7 +291,13 @@ class BlueAntClient:
         try:
             res = await self._request("GET", f"/v1/projects/{project_id}/planningentries", api_key=api_key)
             entries = res.get("entries", [])
-            return [e for e in entries if str(e.get("entryType", "")).lower() == "milestone"]
+            milestones = [e for e in entries if str(e.get("entryType", "")).lower() == "milestone"]
+            entry_types = sorted({str(e.get("entryType")) for e in entries})
+            logger.info(
+                f"Project {project_id}: {len(entries)} planning entries, entryTypes={entry_types}, "
+                f"{len(milestones)} milestone(s)."
+            )
+            return milestones
         except Exception as e:
             logger.error(f"Failed to fetch milestones for project {project_id}: {e}")
             return []

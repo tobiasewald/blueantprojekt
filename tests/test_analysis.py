@@ -12,6 +12,12 @@ from app.prompt_engine import prompt_engine
 from app.blueant_client import blueant_client, normalize_risk_color
 from app.kpi_utils import extract_effort_kpis
 from app.milestone_utils import summarize_milestones
+from app.project_metrics import (
+    compute_effort_forecast,
+    compute_elapsed_time_percent,
+    compute_forecast_completion_date,
+    evaluate_criticality,
+)
 from app.analysis_service import analysis_service
 from app.main import app
 
@@ -55,6 +61,35 @@ class TestMilestoneUtils(unittest.TestCase):
         self.assertEqual(result["total_count"], 0)
         self.assertEqual(result["overdue_count"], 0)
 
+    def test_real_blueant_shape_counts_overdue(self):
+        """Regression test against the real payload shape from the demo tenant:
+        milestones have start == end (a milestone is a point in time, so "end" is
+        the PLANNED date, not a completion date) and usually no "endWished".
+        Treating a set "end" as "completed" previously made every milestone count
+        as done, so the dashboard always reported 0 overdue."""
+        import datetime
+        milestones = [
+            {"description": "Projektstart", "startWished": None, "endWished": None,
+             "start": "2020-06-30T17:30:00+02:00", "end": "2020-06-30T17:30:00+02:00", "progressActual": 0.0},
+            {"description": "Freigabe", "startWished": "2021-06-06", "endWished": None,
+             "start": "2021-06-06T16:00:00+02:00", "end": "2021-06-06T16:00:00+02:00", "progressActual": 100.0},
+            {"description": "Abnahme", "startWished": "2024-10-30", "endWished": "2024-10-30",
+             "start": "2024-10-30T23:00:00+01:00", "end": "2024-10-30T23:00:00+01:00", "progressActual": 0.0},
+        ]
+        result = summarize_milestones(milestones, today=datetime.date(2026, 7, 23))
+        self.assertEqual(result["total_count"], 3)
+        self.assertEqual(result["completed_count"], 1)
+        self.assertEqual(result["overdue_count"], 2)
+
+    def test_future_milestone_is_not_overdue(self):
+        import datetime
+        milestones = [
+            {"description": "Zukunft", "endWished": None,
+             "start": "2030-01-01T00:00:00+01:00", "end": "2030-01-01T00:00:00+01:00", "progressActual": 0.0},
+        ]
+        result = summarize_milestones(milestones, today=datetime.date(2026, 7, 23))
+        self.assertEqual(result["overdue_count"], 0)
+
 
 class TestRiskColorNormalization(unittest.TestCase):
     def test_recognizes_german_and_english_names(self):
@@ -70,6 +105,77 @@ class TestRiskColorNormalization(unittest.TestCase):
         self.assertEqual(normalize_risk_color("C - hoch"), "red")
         self.assertEqual(normalize_risk_color("B - mittel"), "yellow")
         self.assertEqual(normalize_risk_color("A - gering"), "green")
+
+
+class TestProjectMetrics(unittest.TestCase):
+    """Regression tests for defects found during the live demo review."""
+
+    def test_elapsed_time_computed_for_date_only_range(self):
+        """Bug: 'Verstrichene Zeit (Soll)' showed N/A although start and end dates
+        existed, because the value was only passed into the prompt and never
+        written back - the displayed value came unchecked from the LLM."""
+        import datetime
+        pct = compute_elapsed_time_percent(
+            "2020-04-01", "2020-12-31", now=datetime.datetime(2020, 7, 1, tzinfo=datetime.timezone.utc)
+        )
+        self.assertIsNotNone(pct)
+        self.assertGreater(pct, 0.0)
+        self.assertLess(pct, 100.0)
+
+    def test_elapsed_time_none_when_dates_missing(self):
+        self.assertIsNone(compute_elapsed_time_percent(None, None))
+        self.assertIsNone(compute_elapsed_time_percent("2020-01-01", ""))
+
+    def test_criticality_flag_and_level_never_contradict(self):
+        """Bug: the detail modal showed 'Kritikalität: Mittel' while the overview
+        table showed 'Stabil', because is_critical and criticality_level were two
+        independent LLM outputs."""
+        critical = evaluate_criticality("yellow", 0.0, 50.0, 50.0, 0)
+        self.assertTrue(critical["is_critical"])
+        self.assertNotEqual(critical["criticality_level"], "low")
+
+        stable = evaluate_criticality("green", 0.0, 50.0, 50.0, 0)
+        self.assertFalse(stable["is_critical"])
+        self.assertEqual(stable["criticality_level"], "low")
+
+    def test_criticality_reacts_to_statusampel(self):
+        self.assertTrue(evaluate_criticality("red", 0.0, 50.0, 50.0, 0)["is_critical"])
+        self.assertFalse(evaluate_criticality("unbekannt", 0.0, 50.0, 50.0, 0)["is_critical"])
+
+    def test_effort_forecast_matches_linear_extrapolation(self):
+        """Regression test with the real figures of project #362519895, where the
+        LLM reported 130,404 remaining hours instead of 259 - a factor of ~500."""
+        forecast = compute_effort_forecast(planned_hours=4535.01, actual_hours=318.57, progress_percent=55.15)
+        self.assertAlmostEqual(forecast["estimated_remaining_hours"], 259.07, places=1)
+        self.assertAlmostEqual(forecast["forecasted_total_hours"], 577.64, places=1)
+
+    def test_effort_forecast_without_progress_falls_back_to_plan(self):
+        forecast = compute_effort_forecast(planned_hours=100.0, actual_hours=30.0, progress_percent=0.0)
+        self.assertEqual(forecast["estimated_remaining_hours"], 70.0)
+        self.assertEqual(forecast["forecasted_total_hours"], 100.0)
+
+    def test_forecast_completion_date_needs_a_basis(self):
+        self.assertIsNone(compute_forecast_completion_date(None, None, 50.0))
+        self.assertIsNone(compute_forecast_completion_date("2020-01-01", "2021-01-01", 0.0))
+
+    def test_forecast_completion_date_extrapolates(self):
+        import datetime
+        # Half done one year in -> roughly another year to go (2024 is a leap year,
+        # so the doubled span lands on 2026-01-02).
+        result = compute_forecast_completion_date(
+            "2024-01-01", "2025-01-01", 50.0,
+            now=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        )
+        self.assertEqual(result, "2026-01-02")
+
+    def test_completed_project_forecast_uses_end_date(self):
+        result = compute_forecast_completion_date("2020-01-01", "2021-06-30", 100.0)
+        self.assertEqual(result, "2021-06-30")
+
+    def test_criticality_detects_progress_lag(self):
+        result = evaluate_criticality("green", 0.0, 10.0, 80.0, 0)
+        self.assertTrue(result["is_critical"])
+        self.assertTrue(any("Fortschritt" in r for r in result["criticality_reasons"]))
 
 
 class TestStatusampelResolution(unittest.TestCase):
@@ -190,8 +296,13 @@ class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
     @patch("app.blueant_client.BlueAntClient.get_project_milestones")
     @patch("app.llm_client.LLMClient.generate_analysis")
     async def test_analyze_project_success(self, mock_llm, mock_milestones, mock_history, mock_kpis, mock_project):
-        # Configure mocks
-        mock_project.return_value = {"id": 1, "name": "Proj 1"}
+        # Configure mocks. The Statusampel is taken from the Blue Ant record, not
+        # from whatever the LLM claims, so the project must carry a resolved risk.
+        mock_project.return_value = {
+            "id": 1,
+            "name": "Proj 1",
+            "overallRisk": {"color": "green", "name": "A - gering"},
+        }
         mock_kpis.return_value = [{"name": "Plan-Aufwand", "value": 100.0}]
         mock_history.return_value = []
         mock_milestones.return_value = []
@@ -282,6 +393,40 @@ class TestAnalysisService(unittest.IsolatedAsyncioTestCase):
         result = await analysis_service.analyze_project(project_id=5, api_key="test-key")
         self.assertEqual(result["project_id"], 5)
         self.assertNotIn("error", result)
+
+    @patch("app.blueant_client.BlueAntClient.get_project")
+    @patch("app.blueant_client.BlueAntClient.get_project_kpis")
+    @patch("app.blueant_client.BlueAntClient.get_project_status_history")
+    @patch("app.blueant_client.BlueAntClient.get_project_milestones")
+    @patch("app.llm_client.LLMClient.generate_analysis")
+    async def test_contradictory_llm_output_is_corrected(self, mock_llm, mock_milestones, mock_history, mock_kpis, mock_project):
+        """The LLM claims a green, non-critical project with a made-up elapsed time,
+        while the Blue Ant data says the traffic light is red. The data must win."""
+        mock_project.return_value = {
+            "id": 7,
+            "name": "Contradiction Test",
+            "start": "2020-01-01",
+            "end": "2030-01-01",
+            "overallRisk": {"color": "red", "name": "C - hoch"},
+        }
+        mock_kpis.return_value = []
+        mock_history.return_value = []
+        mock_milestones.return_value = []
+        mock_llm.return_value = """
+        {
+            "project_id": 7,
+            "progress_analysis": {"progress_percent": 99.0, "elapsed_time_percent": 12345.0},
+            "risk_assessment": {"statusampel": "green", "is_critical": false, "criticality_level": "medium"}
+        }
+        """
+
+        result = await analysis_service.analyze_project(project_id=7, api_key="test-key")
+
+        self.assertEqual(result["risk_assessment"]["statusampel"], "red")
+        self.assertTrue(result["risk_assessment"]["is_critical"])
+        self.assertNotEqual(result["risk_assessment"]["criticality_level"], "low")
+        self.assertNotEqual(result["progress_analysis"]["elapsed_time_percent"], 12345.0)
+        self.assertLessEqual(result["progress_analysis"]["elapsed_time_percent"], 100.0)
 
     @patch("app.blueant_client.BlueAntClient.get_project")
     async def test_analyze_project_not_found(self, mock_project):

@@ -2,7 +2,7 @@ blueant:
   cache_ttl: 600
   url: https://dashboard-examples.blueant.cloud/rest
 ollama:
-  model: llama3.1
+  model: gemma4
   retries: 3
   timeout: 60
   url: http://host.docker.internal:11434

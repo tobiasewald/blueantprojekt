@@ -8,6 +8,13 @@ from app.prompt_engine import prompt_engine
 from app.llm_client import llm_client
 from app.kpi_utils import extract_effort_kpis
 from app.milestone_utils import summarize_milestones
+from app.project_metrics import (
+    compute_effort_forecast,
+    compute_elapsed_time_percent,
+    compute_forecast_completion_date,
+    evaluate_criticality,
+    resolve_statusampel_color,
+)
 
 logger = logging.getLogger("analysis_service")
 
@@ -34,6 +41,73 @@ class AnalysisService:
         if start_idx != -1 and end_idx != -1:
             text = text[start_idx:end_idx + 1]
         return text
+
+    def _sanitize_llm_result(
+        self,
+        result_data: Dict[str, Any],
+        project: Dict[str, Any],
+        effort: Dict[str, Any],
+        milestone_summary: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Overwrite every deterministically computable field of the LLM's answer.
+
+        The LLM stays responsible for all interpretation (assessments, prognosis
+        text, summaries), but anything that can be derived from the Blue Ant data
+        is computed here. This prevents arithmetic hallucinations and guarantees
+        the internal consistency the client asked for - in particular that
+        is_critical, criticality_level and the dashboard's critical-projects
+        counter can never contradict each other.
+        """
+        elapsed_time_percent = compute_elapsed_time_percent(project.get("start"), project.get("end"))
+        criticality = evaluate_criticality(
+            statusampel=resolve_statusampel_color(project),
+            variance_percent=effort["variance_percent"],
+            progress_percent=effort["progress_percent"],
+            elapsed_time_percent=elapsed_time_percent,
+            overdue_milestones=milestone_summary["overdue_count"],
+        )
+
+        result_data.setdefault("effort_analysis", {})
+        result_data["effort_analysis"]["planned_hours"] = effort["planned_hours"]
+        result_data["effort_analysis"]["actual_hours"] = effort["actual_hours"]
+        result_data["effort_analysis"]["variance_hours"] = effort["variance_hours"]
+        result_data["effort_analysis"]["variance_percent"] = effort["variance_percent"]
+
+        result_data.setdefault("progress_analysis", {})
+        result_data["progress_analysis"]["progress_percent"] = effort["progress_percent"]
+        result_data["progress_analysis"]["elapsed_time_percent"] = elapsed_time_percent
+
+        result_data.setdefault("milestones_overview", {})
+        result_data["milestones_overview"]["total_count"] = milestone_summary["total_count"]
+        result_data["milestones_overview"]["overdue_count"] = milestone_summary["overdue_count"]
+
+        # Forecast figures are arithmetic too - an LLM asked to extrapolate hours
+        # was observed to be off by a factor of 500. Only the prognosis narrative,
+        # its confidence rating and the goal assessment stay LLM-authored.
+        forecast = compute_effort_forecast(
+            effort["planned_hours"], effort["actual_hours"], effort["progress_percent"]
+        )
+        result_data.setdefault("predictions", {})
+        result_data["predictions"]["estimated_remaining_hours"] = forecast["estimated_remaining_hours"]
+        result_data["predictions"]["forecasted_total_hours"] = forecast["forecasted_total_hours"]
+        result_data["predictions"]["expected_completion_date"] = compute_forecast_completion_date(
+            project.get("start"), project.get("end"), effort["progress_percent"]
+        )
+
+        result_data.setdefault("risk_assessment", {})
+        result_data["risk_assessment"]["statusampel"] = resolve_statusampel_color(project)
+        result_data["risk_assessment"]["is_critical"] = criticality["is_critical"]
+        result_data["risk_assessment"]["criticality_level"] = criticality["criticality_level"]
+        # Keep the LLM's own reasoning as extra context, but always lead with the
+        # deterministic reasons so the displayed cause matches the flag.
+        llm_reasons = result_data["risk_assessment"].get("criticality_reasons") or []
+        if not isinstance(llm_reasons, list):
+            llm_reasons = [str(llm_reasons)]
+        result_data["risk_assessment"]["criticality_reasons"] = criticality["criticality_reasons"] + [
+            r for r in llm_reasons if isinstance(r, str) and r not in criticality["criticality_reasons"]
+        ]
+
+        return result_data
 
     async def analyze_project(self, project_id: int, api_key: Optional[str] = None, ollama_api_key: Optional[str] = None) -> Dict[str, Any]:
         """Fetch project details, format prompts, run LLM analysis, and return structured JSON."""
@@ -70,7 +144,12 @@ class AnalysisService:
         try:
             cleaned_text = self._clean_json_response(llm_response)
             parsed_json = json.loads(cleaned_text)
-            return parsed_json
+            return self._sanitize_llm_result(
+                parsed_json,
+                project,
+                extract_effort_kpis(kpis),
+                summarize_milestones(milestones),
+            )
         except Exception as e:
             logger.error(f"Failed to parse LLM JSON for project {project_id}: {e}. Raw response: {llm_response}")
             return self._generate_project_fallback(project, kpis, milestones, f"Failed to parse LLM output: {str(e)}")
@@ -86,12 +165,7 @@ class AnalysisService:
         project_id = project.get("id", 0)
         project_name = project.get("name", "Unnamed Project")
 
-        overall_risk_obj = project.get("overallRisk")
-        overall_risk = "N/A"
-        if isinstance(overall_risk_obj, dict):
-            overall_risk = overall_risk_obj.get("color") or overall_risk_obj.get("name") or "N/A"
-        elif isinstance(overall_risk_obj, str):
-            overall_risk = overall_risk_obj
+        overall_risk = resolve_statusampel_color(project)
 
         effort = extract_effort_kpis(kpis)
         planned_hours = effort["planned_hours"]
@@ -101,15 +175,18 @@ class AnalysisService:
         variance_percent = effort["variance_percent"]
 
         milestone_summary = summarize_milestones(milestones or [])
+        elapsed_time_percent = compute_elapsed_time_percent(project.get("start"), project.get("end"))
+        forecast = compute_effort_forecast(planned_hours, actual_hours, progress_percent)
 
-        criticality_reasons = []
-        if overall_risk.lower() in ["red", "yellow"]:
-            criticality_reasons.append(f"Statusampel steht auf {overall_risk}.")
-        if variance_percent > 15.0:
-            criticality_reasons.append(f"Aufwandsabweichung von {variance_percent}% überschreitet die Schwelle.")
-        if milestone_summary["overdue_count"] > 0:
-            criticality_reasons.append(f"{milestone_summary['overdue_count']} Meilenstein(e) überfällig.")
-        is_critical = len(criticality_reasons) > 0
+        # Same deterministic rules as the LLM path, so a fallback result is never
+        # classified differently than a successful one for identical data.
+        criticality = evaluate_criticality(
+            statusampel=overall_risk,
+            variance_percent=variance_percent,
+            progress_percent=progress_percent,
+            elapsed_time_percent=elapsed_time_percent,
+            overdue_milestones=milestone_summary["overdue_count"],
+        )
 
         return {
             "project_id": project_id,
@@ -124,8 +201,12 @@ class AnalysisService:
             },
             "progress_analysis": {
                 "progress_percent": progress_percent,
-                "elapsed_time_percent": 0.0,
-                "status_relative_to_deadline": "Verstrichene Zeit im Fallback-Modus nicht berechenbar."
+                "elapsed_time_percent": elapsed_time_percent,
+                "status_relative_to_deadline": (
+                    "Keine verwertbaren Start-/Enddaten in Blue Ant hinterlegt."
+                    if elapsed_time_percent is None
+                    else f"Verstrichene Zeit {elapsed_time_percent}% gegenüber Fortschritt {progress_percent}% (regelbasiert)."
+                )
             },
             "milestones_overview": {
                 "total_count": milestone_summary["total_count"],
@@ -133,10 +214,12 @@ class AnalysisService:
                 "summary": milestone_summary["summary_text"]
             },
             "predictions": {
-                "estimated_remaining_hours": max(0.0, planned_hours - actual_hours),
-                "forecasted_total_hours": max(planned_hours, actual_hours),
-                "expected_completion_date": "N/A",
-                "prognosis_confidence": "niedrig",
+                "estimated_remaining_hours": forecast["estimated_remaining_hours"],
+                "forecasted_total_hours": forecast["forecasted_total_hours"],
+                "expected_completion_date": compute_forecast_completion_date(
+                    project.get("start"), project.get("end"), progress_percent
+                ),
+                "prognosis_confidence": "low",
                 "prognosis_text": "KI-Generierung war nicht verfügbar. Einfache lineare Extrapolations-Prognose verwendet."
             },
             "text_summaries": {
@@ -146,11 +229,11 @@ class AnalysisService:
             },
             "risk_assessment": {
                 "statusampel": overall_risk,
-                "is_critical": is_critical,
+                "is_critical": criticality["is_critical"],
                 # English enum to match the LLM's JSON schema (see prompts.yaml)
                 # and the frontend, which only recognizes "low/medium/high".
-                "criticality_level": "high" if is_critical else "low",
-                "criticality_reasons": criticality_reasons,
+                "criticality_level": criticality["criticality_level"],
+                "criticality_reasons": criticality["criticality_reasons"],
                 "goals_vs_status_eval": "KI-Prüfung fehlgeschlagen. Einhaltung der Projektziele konnte nicht bewertet werden."
             }
         }
@@ -239,21 +322,7 @@ class AnalysisService:
                 if result_data is None:
                     return self._generate_project_fallback(proj, kpis, milestones, "LLM generated no response.")
 
-                # Sanitize / overwrite calculated numerical fields to prevent LLM math hallucinations
-                result_data.setdefault("effort_analysis", {})
-                result_data["effort_analysis"]["planned_hours"] = effort["planned_hours"]
-                result_data["effort_analysis"]["actual_hours"] = effort["actual_hours"]
-                result_data["effort_analysis"]["variance_hours"] = effort["variance_hours"]
-                result_data["effort_analysis"]["variance_percent"] = effort["variance_percent"]
-
-                result_data.setdefault("progress_analysis", {})
-                result_data["progress_analysis"]["progress_percent"] = effort["progress_percent"]
-
-                result_data.setdefault("milestones_overview", {})
-                result_data["milestones_overview"]["total_count"] = milestone_summary["total_count"]
-                result_data["milestones_overview"]["overdue_count"] = milestone_summary["overdue_count"]
-
-                return result_data
+                return self._sanitize_llm_result(result_data, proj, effort, milestone_summary)
             except Exception as e:
                 logger.error(f"Error analyzing project {proj.get('id')}: {e}")
                 # Fallback to avoid breaking portfolio-wide analysis

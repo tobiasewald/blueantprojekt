@@ -588,7 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="metric-details-row">
                         <span class="metric-details-label">Verstrichene Zeit (Soll)</span>
-                        <span class="metric-details-val">${progress.elapsed_time_percent || 0}%</span>
+                        <span class="metric-details-val">${progress.elapsed_time_percent === null || progress.elapsed_time_percent === undefined ? 'N/A' : progress.elapsed_time_percent + '%'}</span>
                     </div>
                     <div class="metric-details-row">
                         <span class="metric-details-label">Zeitplan-Status</span>
@@ -624,7 +624,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div class="metric-details-row" style="flex-direction:column; align-items:flex-start; border-bottom:none;">
                             <span class="metric-details-label">Erwarteter Fertigstellungstermin</span>
-                            <span class="metric-details-val" style="font-size:16px; margin-top:4px; color:var(--primary);">${escapeHtml(predictions.expected_completion_date) || 'N/A'}</span>
+                            <span class="metric-details-val" style="font-size:16px; margin-top:4px; color:var(--primary);">${escapeHtml(predictions.expected_completion_date) || 'Nicht prognostizierbar'}</span>
                         </div>
                     </div>
                     <div style="padding-top:10px; border-top:1px solid var(--card-border);">

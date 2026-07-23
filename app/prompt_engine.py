@@ -5,6 +5,11 @@ from typing import Dict, Any, List, Optional
 from app.config import PROMPTS_PATH
 from app.kpi_utils import extract_effort_kpis
 from app.milestone_utils import summarize_milestones
+from app.project_metrics import (
+    compute_elapsed_time_percent,
+    evaluate_criticality,
+    resolve_statusampel_color,
+)
 
 
 class PromptEngine:
@@ -108,14 +113,8 @@ class PromptEngine:
         kpis_summary = effort["kpis_summary"]
 
         # Calculate timeline percentages
-        elapsed_time_percent = 0.0
         now = datetime.datetime.now(datetime.timezone.utc)
-        start_dt = self._parse_datetime_utc(start_date)
-        end_dt = self._parse_datetime_utc(end_date)
-        if start_dt and end_dt and end_dt > start_dt:
-            total_dur = (end_dt - start_dt).total_seconds()
-            elapsed_dur = (now - start_dt).total_seconds()
-            elapsed_time_percent = max(0.0, min(100.0, (elapsed_dur / total_dur) * 100.0))
+        elapsed_time_percent = compute_elapsed_time_percent(start_date, end_date, now=now)
 
         # Estimate remaining hours (prognosis calculation)
         estimated_remaining_hours = 0.0
@@ -132,15 +131,16 @@ class PromptEngine:
         # Meilensteine (milestones)
         milestone_summary = summarize_milestones(milestones or [])
 
-        # Determine if critical based on rules (for prompt formatting helper values)
-        is_critical_bool = "false"
-        if (
-            overall_risk.lower() in ["red", "yellow"]
-            or variance_percent > 15.0
-            or "problem" in problem_memo.lower()
-            or milestone_summary["overdue_count"] > 0
-        ):
-            is_critical_bool = "true"
+        # Determine criticality with the same deterministic rules the analysis
+        # service applies afterwards, so the prompt and the final result agree.
+        criticality = evaluate_criticality(
+            statusampel=resolve_statusampel_color(project),
+            variance_percent=variance_percent,
+            progress_percent=progress_percent,
+            elapsed_time_percent=elapsed_time_percent,
+            overdue_milestones=milestone_summary["overdue_count"],
+        )
+        is_critical_bool = "true" if criticality["is_critical"] else "false"
 
         # Format status history log
         history_lines = []
@@ -175,7 +175,9 @@ class PromptEngine:
             variance_hours=variance_hours,
             variance_percent=round(variance_percent, 2),
             progress_percent=progress_percent,
-            elapsed_time_percent=round(elapsed_time_percent, 2),
+            # Rendered as JSON null when the project has no usable start/end dates,
+            # so the template stays valid JSON and the LLM doesn't invent a number.
+            elapsed_time_percent="null" if elapsed_time_percent is None else elapsed_time_percent,
             estimated_remaining_hours=round(estimated_remaining_hours, 2),
             forecasted_total_hours=round(forecasted_total_hours, 2),
             is_critical_bool=is_critical_bool
